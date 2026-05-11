@@ -176,7 +176,7 @@ jobs:
             -F "platform=android" \
             -F "file=@build/app/outputs/flutter-apk/app-dev-release.zip" \
             -F "build_at=$BUILD_AT" \
-            -F "is_active=true" \
+            -F "is_active=1" \
             -F "notes=$NOTES")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
