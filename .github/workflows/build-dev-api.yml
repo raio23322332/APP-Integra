@@ -9,13 +9,12 @@ on:
       environment:
         description: 'Ambiente de destino'
         required: true
-        default: 'teste'
+        default: 'dev'
         type: choice
         options:
-          - teste
+          - dev
           - homologacao
-          - qa
-          - uat
+          - prod
       notes:
         description: 'Notas da versão'
         required: false
@@ -25,73 +24,103 @@ jobs:
   build-and-upload:
     name: Build & Upload to API
     runs-on: ubuntu-latest
-    
+
     steps:
+      # ──────────────────────────────────────────────
       # 📥 Checkout
+      # ──────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      # 🎯 Setup Flutter
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.7'
-          channel: 'stable'
-      
-      # 🏷️ Gerar Versão
-      - name: Generate Version
-        id: version
-        run: |
-          COMMIT_COUNT=$(git rev-list --count HEAD)
-          DATE=$(date +'%Y.%m.%d')
-          BRANCH=${{ github.ref_name }}
-          ENVIRONMENT=${{ github.event.inputs.environment || 'teste' }}
-          
-          # Version name format: YYYY.MM.DD+COMMIT-BRANCH
-          VERSION_NAME="${DATE}+${COMMIT_COUNT}-${BRANCH}"
-          
-          echo "version_code=$COMMIT_COUNT" >> $GITHUB_OUTPUT
-          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-          echo "📱 Version Code: $COMMIT_COUNT"
-          echo "🏷️ Version Name: $VERSION_NAME"
-          echo "🌍 Environment: $ENVIRONMENT"
-      
-      # 📦 Dependencies
-      - name: Install dependencies
-        run: flutter pub get
-      
-      # 🔐 Setup Java
+
+      # ──────────────────────────────────────────────
+      # ☕ Setup Java (antes do Flutter)
+      # ──────────────────────────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      
+
+      # ──────────────────────────────────────────────
+      # 🎯 Setup Flutter (versão do .fvmrc)
+      # ──────────────────────────────────────────────
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: 'stable'
+          cache: true
+
+      # ──────────────────────────────────────────────
+      # 🏷️ Gerar Versão
+      # ──────────────────────────────────────────────
+      - name: Generate Version
+        id: version
+        run: |
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          DATE=$(date +'%Y.%m.%d')
+          BRANCH="${{ github.ref_name }}"
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+
+          # Version name format: YYYY.MM.DD+COMMIT-BRANCH
+          VERSION_NAME="${DATE}+${COMMIT_COUNT}-${BRANCH}"
+
+          echo "version_code=$COMMIT_COUNT"   >> $GITHUB_OUTPUT
+          echo "version_name=$VERSION_NAME"   >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT"     >> $GITHUB_OUTPUT
+
+          echo "📱 Version Code : $COMMIT_COUNT"
+          echo "🏷️  Version Name : $VERSION_NAME"
+          echo "🌍 Environment  : $ENVIRONMENT"
+
+      # ──────────────────────────────────────────────
+      # 📦 Dependencies
+      # ──────────────────────────────────────────────
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ──────────────────────────────────────────────
       # 🔑 Keystore
+      # ──────────────────────────────────────────────
       - name: Decode Keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
-      
+
+      # ──────────────────────────────────────────────
       # 📝 Key Properties
+      # ──────────────────────────────────────────────
       - name: Create key.properties
         run: |
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
-          echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
-          echo "keyAlias=upload" >> android/key.properties
-          echo "storeFile=upload-keystore.jks" >> android/key.properties
-      
-      # 🚀 Build APK Universal
-      - name: Build APK
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=upload
+          storeFile=upload-keystore.jks
+          EOF
+
+      # ──────────────────────────────────────────────
+      # 🚀 Build APK — flavor dev
+      #
+      # CORREÇÕES aplicadas:
+      #   ✅ --flavor dev
+      #   ✅ --dart-define=FLAVOR=dev  (FlavorConfig.dart)
+      #   ✅ --dart-define=ENV_FILE=assets/env/env.dev
+      # ──────────────────────────────────────────────
+      - name: Build APK (flavor dev)
         run: |
           flutter build apk \
+            --flavor dev \
+            --dart-define=FLAVOR=dev \
+            --dart-define=ENV_FILE=assets/env/env.dev \
             --release \
             --build-number=${{ steps.version.outputs.version_code }} \
             --build-name=${{ steps.version.outputs.version_name }}
-      
+
+      # ──────────────────────────────────────────────
       # 🔐 Autenticar na API
+      # ──────────────────────────────────────────────
       - name: Authenticate with API
         id: auth
         run: |
@@ -103,25 +132,30 @@ jobs:
               "email": "${{ secrets.API_EMAIL }}",
               "password": "${{ secrets.API_PASSWORD }}"
             }')
-          
-          TOKEN=$(echo $AUTH_RESPONSE | jq -r '.token')
-          
-          if [ "$TOKEN" = "null" ]; then
+
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token')
+
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
             echo "❌ Falha na autenticação"
             echo "Response: $AUTH_RESPONSE"
             exit 1
           fi
-          
+
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
           echo "✅ Autenticação realizada com sucesso"
-      
+
+      # ──────────────────────────────────────────────
       # 📤 Upload APK para API
+      #
+      # CORREÇÃO: caminho correto do APK com flavor
+      #   ✅ app-dev-release.apk  (era app-release.apk)
+      # ──────────────────────────────────────────────
       - name: Upload APK to API
         run: |
           BUILD_AT=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-          NOTES="${{ github.event.inputs.notes || 'Build automático via GitHub Actions - Branch: ${{ github.ref_name }}' }}"
-          
-          curl -s -X POST \
+          NOTES="${{ github.event.inputs.notes || format('Build automático via GitHub Actions - Branch: {0}', github.ref_name) }}"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "${{ secrets.API_BASE_URL }}/api/v1/central/versionamento/upload" \
             -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
             -H "Accept: application/json" \
@@ -129,43 +163,68 @@ jobs:
             -F "version=${{ steps.version.outputs.version_name }}" \
             -F "environment=${{ steps.version.outputs.environment }}" \
             -F "platform=android" \
-            -F "file=@build/app/outputs/flutter-apk/app-release.apk" \
+            -F "file=@build/app/outputs/flutter-apk/app-dev-release.apk" \
             -F "build_at=$BUILD_AT" \
             -F "is_active=true" \
-            -F "notes=$NOTES"
-      
+            -F "notes=$NOTES")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "📡 HTTP Status: $HTTP_CODE"
+          echo "📄 Response: $BODY"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "❌ Upload falhou com status $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✅ Upload realizado com sucesso"
+
+      # ──────────────────────────────────────────────
       # 📦 Salvar Artefato no GitHub
+      #
+      # CORREÇÃO: caminho e nome do artefato com flavor
+      #   ✅ app-dev-release.apk  (era app-release.apk)
+      #   ✅ nome do artifact inclui flavor
+      # ──────────────────────────────────────────────
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-v${{ steps.version.outputs.version_code }}
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: apk-dev-v${{ steps.version.outputs.version_code }}
+          path: build/app/outputs/flutter-apk/app-dev-release.apk
           retention-days: 15
-      
+
+      # ──────────────────────────────────────────────
       # 🏷️ Tag no Git
+      # ──────────────────────────────────────────────
       - name: Create Git Tag
         if: success()
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git tag -a "dev-v${{ steps.version.outputs.version_name }}" -m "Dev Build ${{ steps.version.outputs.version_code }} - ${{ steps.version.outputs.environment }}"
-          git push origin "dev-v${{ steps.version.outputs.version_name }}"
+          TAG_NAME="dev-v${{ steps.version.outputs.version_name }}"
+          git tag -a "$TAG_NAME" -m "Dev Build ${{ steps.version.outputs.version_code }} - ${{ steps.version.outputs.environment }}"
+          git push origin "$TAG_NAME"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      # ✅ Notificação de Sucesso
+
+      # ──────────────────────────────────────────────
+      # ✅ / ❌ Notificações
+      # ──────────────────────────────────────────────
       - name: Success Notification
         if: success()
         run: |
           echo "🎉 Build e upload realizados com sucesso!"
-          echo "📱 Versão: ${{ steps.version.outputs.version_name }}"
-          echo "🌍 Ambiente: ${{ steps.version.outputs.environment }}"
-          echo "📦 Arquivo enviado: APK"
-      
-      # ❌ Notificação de Erro
+          echo "📱 Versão    : ${{ steps.version.outputs.version_name }}"
+          echo "🌍 Ambiente  : ${{ steps.version.outputs.environment }}"
+          echo "📦 Flavor    : dev"
+          echo "📂 APK       : app-dev-release.apk"
+
       - name: Error Notification
         if: failure()
         run: |
           echo "❌ Falha no processo de build/upload"
-          echo "📱 Versão: ${{ steps.version.outputs.version_name }}"
-          echo "🌍 Ambiente: ${{ steps.version.outputs.environment }}"
+          echo "📱 Versão    : ${{ steps.version.outputs.version_name }}"
+          echo "🌍 Ambiente  : ${{ steps.version.outputs.environment }}"
+          echo "📂 Flavor    : dev"
