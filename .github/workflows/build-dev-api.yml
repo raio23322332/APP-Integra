@@ -102,30 +102,46 @@ jobs:
           EOF
 
       # ──────────────────────────────────────────────
-      # 🚀 Build APK — flavor dev
+      # 🚀 Build APK — flavor dev (split para reduzir tamanho)
       #
       # CORREÇÕES aplicadas:
       #   ✅ --flavor dev
       #   ✅ --dart-define=FLAVOR=dev  (FlavorConfig.dart)
       #   ✅ --dart-define=ENV_FILE=assets/env/env.dev
+      #   ✅ --split-per-abi para reduzir tamanho dos arquivos
       # ──────────────────────────────────────────────
-      - name: Build APK (flavor dev)
+      - name: Build APK (flavor dev - split per ABI)
         run: |
           flutter build apk \
             --flavor dev \
             --dart-define=FLAVOR=dev \
             --dart-define=ENV_FILE=assets/env/env.dev \
             --release \
+            --split-per-abi \
             --build-number=${{ steps.version.outputs.version_code }} \
             --build-name=${{ steps.version.outputs.version_name }}
 
       # ──────────────────────────────────────────────
-      # � Compactar APK em ZIP
+      # 📦 Compactar APKs em ZIP (usar o menor arquivo)
       # ──────────────────────────────────────────────
-      - name: Create ZIP from APK
+      - name: Create ZIP from APKs
         run: |
           cd build/app/outputs/flutter-apk/
-          zip app-dev-release.zip app-dev-release.apk
+          
+          # Listar arquivos gerados e mostrar tamanhos
+          echo "📊 APKs gerados:"
+          ls -lh *.apk
+          
+          # Encontrar o menor APK (geralmente arm64-v8a)
+          SMALLEST_APK=$(ls -S *.apk | head -n1)
+          echo "📱 Usando APK menor: $SMALLEST_APK"
+          
+          # Compactar o menor APK
+          zip app-dev-release.zip "$SMALLEST_APK"
+          
+          # Mostrar tamanho final
+          echo "📦 Tamanho do ZIP:"
+          ls -lh app-dev-release.zip
           echo "✅ APK compactado para ZIP com sucesso"
 
       # ──────────────────────────────────────────────
