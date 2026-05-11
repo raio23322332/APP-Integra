@@ -9,12 +9,13 @@ on:
       environment:
         description: 'Ambiente de destino'
         required: true
-        default: 'dev'
+        default: 'qa'
         type: choice
         options:
-          - dev
+          - teste
           - homologacao
-          - prod
+          - qa
+          - uat
       notes:
         description: 'Notas da versão'
         required: false
@@ -125,7 +126,7 @@ jobs:
         id: auth
         run: |
           AUTH_RESPONSE=$(curl -s -X POST \
-            "${{ secrets.API_BASE_URL }}/api/v1/central/versionamento/auth" \
+            "${{ secrets.API_BASE_URL }}/api/central/versionamento/auth" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
             -d '{
@@ -133,7 +134,7 @@ jobs:
               "password": "${{ secrets.API_PASSWORD }}"
             }')
 
-          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token')
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.access_token')
 
           if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
             echo "❌ Falha na autenticação"
@@ -156,7 +157,7 @@ jobs:
           NOTES="${{ github.event.inputs.notes || format('Build automático via GitHub Actions - Branch: {0}', github.ref_name) }}"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${{ secrets.API_BASE_URL }}/api/v1/central/versionamento/upload" \
+            "${{ secrets.API_BASE_URL }}/api/central/versionamento/upload" \
             -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
             -H "Accept: application/json" \
             -F "name=Integra Mobile" \
