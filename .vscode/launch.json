@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Integra - Dev",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "args": [
+        "--flavor",
+        "dev",
+        "--dart-define=FLAVOR=dev",
+        "--dart-define=ENV_FILE=.env"
+      ]
+    },
+    {
+      "name": "Integra - Homologação",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "args": [
+        "--flavor",
+        "homologacao",
+        "--dart-define=FLAVOR=homologacao",
+        "--dart-define=ENV_FILE=assets/env/env.homologacao"
+      ]
+    },
+    {
+      "name": "Integra - Produção",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "release",
+      "args": [
+        "--flavor",
+        "prod",
+        "--dart-define=FLAVOR=prod",
+        "--dart-define=ENV_FILE=assets/env/env.prod"
+      ]
+    }
+  ]
+}

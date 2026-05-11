@@ -1,0 +1,81 @@
+# .github/workflows/build-aab.yml
+name: 🚀 Build App Bundle (AAB)
+
+on:
+  push:
+    branches: [development, main]
+  workflow_dispatch:  # Permite executar manualmente no GitHub
+
+jobs:
+  build-aab:
+    name: Build AAB
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 📥 Checkout
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      # 🎯 Setup Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: 'stable'
+      
+      # 🏷️ Gerar Versão
+      - name: Generate Version
+        id: version
+        run: |
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          DATE=$(date +'%Y.%m.%d')
+          echo "version_code=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "version_name=${DATE}+${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+          echo "📱 Version Code: $COMMIT_COUNT"
+          echo "🏷️ Version Name: ${DATE}+${COMMIT_COUNT}"
+      
+      # 📦 Dependencies
+      - name: Install dependencies
+        run: flutter pub get
+      
+      # 🔑 Keystore
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+      
+      # 📝 Key Properties
+      - name: Create key.properties
+        run: |
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
+          echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=upload" >> android/key.properties
+          echo "storeFile=upload-keystore.jks" >> android/key.properties
+      
+      # 🚀 Build AAB
+      - name: Build App Bundle
+        run: |
+          flutter build appbundle \
+            --release \
+            --build-number=${{ steps.version.outputs.version_code }} \
+            --build-name=${{ steps.version.outputs.version_name }}
+      
+      # 📤 Upload AAB
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: 🎁 app-bundle-v${{ steps.version.outputs.version_code }}
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+      
+      # 🏷️ Tag
+      - name: Create Git Tag
+        if: github.ref == 'refs/heads/main' && success()
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "aab-v${{ steps.version.outputs.version_name }}" -m "AAB Build ${{ steps.version.outputs.version_code }}"
+          git push origin "aab-v${{ steps.version.outputs.version_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

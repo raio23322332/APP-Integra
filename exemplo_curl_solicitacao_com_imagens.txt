@@ -1,0 +1,140 @@
+# EXEMPLO DE CURL PARA CRIAR SOLICITAÇÃO COM IMAGENS
+# Use este comando no Insomnia ou terminal para testar o envio de imagens
+
+curl -X POST "https://sua-api.com/api/v1/solicitacoes/" \
+  -H "Authorization: Bearer SEU_TOKEN_AQUI" \
+  -H "Host: seu-dominio.com" \
+  -H "Accept: application/json" \
+  -F "user_id=123" \
+  -F "tipo_id=1" \
+  -F "subtipo_id=2" \
+  -F "descricao=Descrição da solicitação de teste" \
+  -F "observacao=Observação opcional para teste" \
+  -F "privacidade=0" \
+  -F "latitude=-23.550520" \
+  -F "longitude=-46.633308" \
+  -F "cep=01234-567" \
+  -F "logradouro=Rua Exemplo" \
+  -F "numero=123" \
+  -F "bairro=Centro" \
+  -F "cidade=São Paulo" \
+  -F "estado=SP" \
+  -F "imagens[]=@/caminho/para/sua/imagem1.jpg" \
+  -F "imagens[]=@/caminho/para/sua/imagem2.png"
+
+# ====================================================
+# INSTRUÇÕES PARA USAR NO INSOMNIA:
+# ====================================================
+
+# 1. Criar nova requisição:
+#    - Método: POST
+#    - URL: https://sua-api.com/api/v1/solicitacoes/
+
+# 2. Headers (Auth):
+#    - Authorization: Bearer SEU_TOKEN_AQUI
+#    - Host: seu-dominio.com
+#    - Accept: application/json
+#    ⚠️ NÃO DEFINIR 'Content-Type' - deixar automático para multipart!
+
+# 3. Body:
+#    - Selecionar "Multipart Form"
+#    - Adicionar os campos de texto (APENAS campos que o backend aceita):
+#      * user_id: 123 (OBRIGATÓRIO)
+#      * subtipo_id: 1 (OBRIGATÓRIO, valor entre 1-13)
+#      * cep: 01234-567 (OBRIGATÓRIO)
+#      * numero: 123 (OBRIGATÓRIO)
+#      * bairro: Centro (OBRIGATÓRIO)
+#      * cidade: São Paulo (OBRIGATÓRIO)
+#      * estado: SP (OBRIGATÓRIO, apenas 2 caracteres)
+#      * descricao: Descrição da solicitação (OPCIONAL)
+#      * observacao: (OPCIONAL, pode ser vazio)
+#      * privacidade: 1 (OPCIONAL, 0=público, 1=privado)
+#      * latitude: -23.550520 (OPCIONAL)
+#      * longitude: -46.633308 (OPCIONAL)
+#      * status: aguardando (OPCIONAL)
+
+# 4. Arquivos (imagens):
+#    - Para cada imagem, adicionar campo do tipo "File":
+#      * Nome: imagens[] (IMPORTANTE: manter os colchetes [])
+#      * Tipo: File
+#      * Selecionar arquivo: escolher imagem1.jpg, imagem2.png, etc.
+#      * Formatos suportados: JPG, PNG, GIF (máx 5MB cada)
+
+# ====================================================
+# CAMPOS OBRIGATÓRIOS:
+# ====================================================
+# - user_id: ID do usuário autenticado
+# - tipo_id: ID do tipo/categoria da solicitação
+# - subtipo_id: ID do subtipo (1-13)
+# - descricao: Descrição da solicitação
+
+# ====================================================
+# CAMPOS OPCIONAIS:
+# ====================================================
+# - observacao: Observação adicional
+# - privacidade: 0=público, 1=privado
+# - latitude/longitude: Coordenadas GPS
+# - cep, logradouro, numero, bairro, cidade, estado: Endereço
+# - imagens[]: Array de arquivos de imagem (JPG, PNG, GIF até 5MB cada)
+
+# ====================================================
+# RESPOSTA ESPERADA (SUCESSO - Status 201):
+# ====================================================
+# {
+#   "id": 123,
+#   "user_id": 123,
+#   "tipo_id": 1,
+#   "subtipo_id": 2,
+#   "descricao": "Descrição da solicitação",
+#   "observacao": "Observação opcional",
+#   "privacidade": 0,
+#   "latitude": -23.550520,
+#   "longitude": -46.633308,
+#   "cep": "01234-567",
+#   "logradouro": "Rua Exemplo",
+#   "numero": "123",
+#   "bairro": "Centro",
+#   "cidade": "São Paulo",
+#   "estado": "SP",
+#   "status": "pendente",
+#   "imagens": [
+#     {
+#       "id": 456,
+#       "url": "https://api.com/uploads/imagem1.jpg",
+#       "nome": "imagem_1_123456789.jpg"
+#     },
+#     {
+#       "id": 457,
+#       "url": "https://api.com/uploads/imagem2.png",
+#       "nome": "imagem_2_123456790.png"
+#     }
+#   ],
+#   "created_at": "2024-01-16T11:55:00.000000Z",
+#   "updated_at": "2024-01-16T11:55:00.000000Z"
+# }
+
+# ====================================================
+# POSSÍVEIS ERROS:
+# ====================================================
+# Status 400: Campos obrigatórios faltando
+# {
+#   "message": "Validation failed",
+#   "errors": {
+#     "subtipo_id": ["O subtipo_id é obrigatório"],
+#     "descricao": ["A descrição é obrigatória"]
+#   }
+# }
+
+# Status 401: Token inválido
+# {
+#   "message": "Unauthenticated"
+# }
+
+# Status 422: Erro de validação
+# {
+#   "message": "Dados inválidos",
+#   "errors": {
+#     "imagens.0": ["Arquivo muito grande. Máximo 5MB"],
+#     "imagens.1": ["Formato não suportado. Use JPG, PNG ou GIF"]
+#   }
+# }

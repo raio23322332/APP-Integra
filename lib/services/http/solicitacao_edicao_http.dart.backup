@@ -1,0 +1,454 @@
+// services/http/solicitacao_edicao_http.dart
+// ✅ SOLUÇÃO PROFISSIONAL PARA EDIÇÃO DE SOLICITAÇÕES
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as p;
+
+import '../shared_preference_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:integra_app/core/helpers/console_log.dart';
+
+class SolicitacaoEdicaoHttp {
+  final SharedPreferenceService pref = SharedPreferenceService();
+
+  // ✅ MÉTODO PARA ENVIAR IMAGENS EM LOTES (EVITAR ERRO 413)
+  Future<List<http.Response>> enviarImagensEmLotes({
+    required int solicitacaoId,
+    required List<File> imagens,
+    int maxPorLote = 2, // Máximo 2 imagens por lote para ser seguro
+    int maxMBPorLote = 4, // Máximo 4MB por lote
+  }) async {
+    final responses = <http.Response>[];
+    final lotes = <List<File>>[];
+    
+    // Separar em lotes
+    int loteAtual = 0;
+    int tamanhoLoteAtual = 0;
+    final loteImagensAtual = <File>[];
+    
+    for (final imagem in imagens) {
+      final tamanho = await imagem.length();
+      
+      // Se exceder o limite do lote, criar novo lote
+      if (loteImagensAtual.length >= maxPorLote || 
+          tamanhoLoteAtual + tamanho > maxMBPorLote * 1024 * 1024) {
+        if (loteImagensAtual.isNotEmpty) {
+          lotes.add(List.from(loteImagensAtual));
+          loteImagensAtual.clear();
+          tamanhoLoteAtual = 0;
+          loteAtual++;
+        }
+      }
+      
+      loteImagensAtual.add(imagem);
+      tamanhoLoteAtual += tamanho;
+    }
+    
+    // Adicionar último lote
+    if (loteImagensAtual.isNotEmpty) {
+      lotes.add(loteImagensAtual);
+    }
+    
+    ConsoleLog.informacao('📦 Enviando ${imagens.length} imagens em ${lotes.length} lotes');
+    
+    // Enviar cada lote
+    for (int i = 0; i < lotes.length; i++) {
+      final lote = lotes[i];
+      ConsoleLog.informacao('📦 Enviando lote ${i + 1}/${lotes.length} (${lote.length} imagens)');
+      
+      try {
+        final response = await adicionarImagem(
+          solicitacaoId: solicitacaoId,
+          imagens: lote,
+        );
+        responses.add(response);
+        
+        if (response.statusCode == 200) {
+          ConsoleLog.informacao('✅ Lote ${i + 1} enviado com sucesso');
+        } else {
+          ConsoleLog.error('❌ Erro no lote ${i + 1}: ${response.statusCode}');
+        }
+        
+        // Pequena pausa entre lotes para não sobrecarregar
+        if (i < lotes.length - 1) {
+          await Future.delayed(Duration(milliseconds: 500));
+        }
+        
+      } catch (e) {
+        ConsoleLog.error('❌ Erro ao enviar lote ${i + 1}: $e');
+        // Adicionar response de erro
+        responses.add(http.Response(
+          'Erro no lote ${i + 1}: $e',
+          500,
+        ));
+      }
+    }
+    
+    return responses;
+  }
+
+  // ✅ MÉTODO APENAS PARA ADICIONAR IMAGEM
+  Future<http.Response> adicionarImagem({
+    required int solicitacaoId,
+    required List<File> imagens,
+  }) async {
+    await pref.init();
+
+    final token = pref.getAccessToken();
+    final tenantDomain = pref.getTenantDomain();
+    final baseUrl = dotenv.env['URL_BASE_API'];
+    
+    ConsoleLog.debug("token -> $token");
+    if (token == null || baseUrl == null) {
+      throw Exception('Configuração inválida');
+    }
+
+    // ✅ CORREÇÃO: Forçar tenant domain correto
+    final correctedTenantDomain = (tenantDomain == null || 
+        tenantDomain.isEmpty || 
+        tenantDomain.contains(RegExp(r'\d+\.\d+\.\d+\.\d+'))) 
+        ? 'testtt.localhost' 
+        : tenantDomain;
+
+    final uri = Uri.parse(_normalizeUrl(baseUrl, 'api/v1/solicitacoes/$solicitacaoId/edit'));
+    ConsoleLog.informacao('URL adicionar imagem: $uri');
+
+    final request = http.MultipartRequest('PUT', uri);
+
+    // ✅ Headers simples
+    request.headers.addAll({
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+      'Host': correctedTenantDomain,
+    });
+    
+    ConsoleLog.informacao('Headers configurados');
+
+    // ✅ Apenas imagens - NENHUM OUTRO CAMPO
+    if (imagens.isNotEmpty) {
+      ConsoleLog.informacao('Processando ${imagens.length} imagens...');
+      
+      for (int i = 0; i < imagens.length; i++) {
+        final file = imagens[i];
+        ConsoleLog.informacao('Processando imagem ${i + 1}: ${file.path}');
+
+        final ext = p.extension(file.path).toLowerCase();
+        final mime = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+        }[ext];
+
+        if (mime == null) {
+          ConsoleLog.error('Formato inválido: $ext');
+          continue;
+        }
+
+        try {
+          final fileSize = await file.length();
+          ConsoleLog.informacao('Tamanho: ${fileSize} bytes (${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB)');
+          
+          // Validar tamanho máximo (5MB)
+          if (fileSize > 5 * 1024 * 1024) {
+            ConsoleLog.error('Arquivo muito grande: ${fileSize} bytes > 5MB');
+            continue;
+          }
+          
+          // ✅ Apenas imagem - sem dados adicionais
+          final multipartFile = await http.MultipartFile.fromPath(
+            'imagens[$i]',
+            file.path,
+            contentType: MediaType.parse(mime),
+          );
+          request.files.add(multipartFile);
+          ConsoleLog.informacao('Imagem ${i + 1} adicionada (${multipartFile.length} bytes)');
+        } catch (e) {
+          ConsoleLog.error('Erro ao processar imagem ${i + 1}: $e');
+          continue;
+        }
+      }
+    }
+
+    ConsoleLog.informacao('Enviando requisição com ${request.files.length} arquivos...');
+    
+    try {
+      final streamedResponse = await request.send().timeout(
+        Duration(seconds: 45),
+        onTimeout: () {
+          ConsoleLog.error('Timeout na requisição');
+          throw Exception('Tempo limite excedido na requisição (45s)');
+        },
+      );
+
+      final response = await http.Response.fromStream(streamedResponse);
+      ConsoleLog.informacao('Status Code: ${response.statusCode}');
+      ConsoleLog.informacao('Response Body: ${response.body}');
+      
+      return response;
+    } catch (e) {
+      ConsoleLog.error('Erro na requisição: $e');
+      rethrow;
+    }
+  }
+
+  // ✅ MÉTODO IGUAL CRIAÇÃO QUE FUNCIONA
+  Future<http.Response> editarSolicitacao({
+    required int solicitacaoId,
+    required String subtipoId,
+    required String descricao,
+    String? observacao,
+    String? status,
+    String? cep,
+    String? logradouro,
+    String? numero,
+    String? complemento,
+    String? bairro,
+    String? cidade,
+    String? estado,
+    List<File>? imagens,
+    List<String>? imagensParaRemover,
+  }) async {
+    await pref.init();
+
+    final token = pref.getAccessToken();
+    final tenantDomain = pref.getTenantDomain();
+    final baseUrl = dotenv.env['URL_BASE_API'];
+    
+    ConsoleLog.debug("token -> $token");
+    if (token == null || baseUrl == null) {
+      throw Exception('Configuração inválida');
+    }
+
+    // ✅ CORREÇÃO: Forçar tenant domain correto
+    final correctedTenantDomain = (tenantDomain == null || 
+        tenantDomain.isEmpty || 
+        tenantDomain.contains(RegExp(r'\d+\.\d+\.\d+\.\d+'))) 
+        ? 'testtt.localhost' 
+        : tenantDomain;
+
+    final uri = Uri.parse(_normalizeUrl(baseUrl, 'api/v1/solicitacoes/$solicitacaoId/edit'));
+    ConsoleLog.informacao('URL edição: $uri');
+
+    final request = http.MultipartRequest('PUT', uri);
+
+    // ✅ Headers IGUAL CRIAÇÃO
+    request.headers.addAll({
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+      'Host': correctedTenantDomain,
+    });
+    
+    ConsoleLog.informacao('Headers configurados');
+    
+    // ✅ Fields - EVITAR STRINGS VAZIAS QUE CAUSAM 302
+    final dados = <String, String>{};
+    dados['subtipo_id'] = subtipoId;
+    dados['descricao'] = descricao;
+    if (observacao?.isNotEmpty == true) dados['observacao'] = observacao!;
+    if (status?.isNotEmpty == true) dados['status'] = status!;
+    
+    // Dados de endereço - apenas se preenchidos (evitar 302)
+    if (cep?.isNotEmpty == true) dados['cep'] = cep!;
+    if (logradouro?.isNotEmpty == true) dados['logradouro'] = logradouro!;
+    if (numero?.isNotEmpty == true) dados['numero'] = numero!;
+    if (bairro?.isNotEmpty == true) dados['bairro'] = bairro!;
+    if (cidade?.isNotEmpty == true) dados['cidade'] = cidade!;
+    if (estado?.isNotEmpty == true) dados['estado'] = estado!;
+    if (complemento?.isNotEmpty == true) dados['complemento'] = complemento!;
+    
+    // Imagens para remover
+    if (imagensParaRemover?.isNotEmpty == true) {
+      for (int i = 0; i < imagensParaRemover!.length; i++) {
+        dados['imagens_para_remover[$i]'] = imagensParaRemover![i];
+      }
+    }
+    
+    request.fields.addAll(dados);
+    ConsoleLog.informacao('Fields adicionados: ${request.fields.length}');
+    
+    ConsoleLog.informacao('🔍 DEBUG FIELDS ENVIADOS:');
+    request.fields.forEach((key, value) {
+      ConsoleLog.informacao('  - $key: "$value"');
+    });
+
+    // ✅ VALIDAÇÃO DE TAMANHO TOTAL - EVITAR ERRO 413
+    int totalSize = 0;
+    final validImages = <File>[];
+    
+    for (int i = 0; i < imagens.length; i++) {
+      final file = imagens[i];
+      final fileSize = await file.length();
+      
+      // Validar tamanho individual (2MB para ser seguro com servidor)
+      if (fileSize > 2 * 1024 * 1024) {
+        ConsoleLog.error('❌ Imagem muito grande: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB > 2MB');
+        continue;
+      }
+      
+      // Validar tamanho total (máximo 4MB para ser seguro)
+      if (totalSize + fileSize > 4 * 1024 * 1024) {
+        ConsoleLog.error('❌ Limite total excedido: ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB + ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB > 4MB');
+        continue;
+      }
+      
+      validImages.add(file);
+      totalSize += fileSize;
+    }
+    
+    ConsoleLog.informacao('✅ Imagens válidas: ${validImages.length}/${imagens.length}');
+    ConsoleLog.informacao('✅ Tamanho total: ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB');
+    
+    if (validImages.isEmpty) {
+      ConsoleLog.error('❌ Nenhuma imagem válida para enviar');
+      throw Exception('Nenhuma imagem válida para enviar. Use imagens menores que 2MB ou envie em lotes.');
+    }
+    
+    // ✅ Arquivos - APENAS IMAGENS VÁLIDAS
+    ConsoleLog.informacao('Processando ${validImages.length} imagens válidas...');
+    
+    for (int i = 0; i < validImages.length; i++) {
+        final file = validImages[i];
+        ConsoleLog.informacao('Processando imagem ${i + 1}: ${file.path}');
+
+        final ext = p.extension(file.path).toLowerCase();
+        final mime = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+        }[ext];
+
+        if (mime == null) {
+          ConsoleLog.error('Formato inválido: $ext');
+          continue;
+        }
+
+        try {
+          final fileSize = await file.length();
+          final fileExists = await file.exists();
+          
+          ConsoleLog.informacao('🔍 DEBUG IMAGEM ${i + 1}:');
+          ConsoleLog.informacao('  - Caminho: ${file.path}');
+          ConsoleLog.informacao('  - Extensão: $ext');
+          ConsoleLog.informacao('  - MIME: $mime');
+          ConsoleLog.informacao('  - Tamanho: ${fileSize} bytes (${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB)');
+          ConsoleLog.informacao('  - Existe: $fileExists');
+          
+          // Validações básicas (tamanho já validado acima)
+          if (!fileExists) {
+            ConsoleLog.error('❌ ARQUIVO NÃO EXISTE: ${file.path}');
+            continue;
+          }
+          
+          if (fileSize == 0) {
+            ConsoleLog.error('❌ ARQUIVO VAZIO: ${file.path}');
+            continue;
+          }
+          
+          if (mime == null) {
+            ConsoleLog.error('❌ FORMATO NÃO SUPORTADO: $ext');
+            ConsoleLog.error('   Formatos suportados: .jpg, .jpeg, .png, .gif');
+            continue;
+          }
+          
+          // ✅ TENTAR CRIAR MULTIPART
+          try {
+            final multipartFile = await http.MultipartFile.fromPath(
+              'imagens[$i]',
+              file.path,
+              contentType: MediaType.parse(mime),
+            );
+            
+            ConsoleLog.informacao('✅ IMAGEM PROCESSADA: ${multipartFile.filename}');
+            ConsoleLog.informacao('  - Field: "${multipartFile.field}"');
+            ConsoleLog.informacao('  - ContentType: "${multipartFile.contentType}"');
+            ConsoleLog.informacao('  - Final Size: ${multipartFile.length} bytes');
+            
+            request.files.add(multipartFile);
+            
+          } catch (multipartError) {
+            ConsoleLog.error('❌ ERRO AO CRIAR MULTIPART: $multipartError');
+            ConsoleLog.error('   Possível causa: arquivo corrompido ou formato inválido');
+            continue;
+          }
+          
+        } catch (e) {
+          ConsoleLog.error('❌ ERRO GERAL AO PROCESSAR IMAGEM ${i + 1}: $e');
+          ConsoleLog.error('   Stack trace: ${StackTrace.current}');
+          continue;
+        }
+      }
+    }
+
+    ConsoleLog.informacao('Enviando requisição com ${request.files.length} arquivos...');
+    
+    // ✅ DEBUG COMPLETO DA REQUISIÇÃO
+    ConsoleLog.informacao('🔍 DEBUG REQUISIÇÃO COMPLETA:');
+    ConsoleLog.informacao('  - URL: ${request.url}');
+    ConsoleLog.informacao('  - Método: ${request.method}');
+    ConsoleLog.informacao('  - Headers: ${request.headers}');
+    ConsoleLog.informacao('  - Fields: ${request.fields}');
+    ConsoleLog.informacao('  - Arquivos: ${request.files.length}');
+    for (int i = 0; i < request.files.length; i++) {
+      final file = request.files[i];
+      ConsoleLog.informacao('    Arquivo $i: ${file.field} = ${file.filename} (${file.length} bytes, ${file.contentType})');
+    }
+    
+    try {
+      final streamedResponse = await request.send().timeout(
+        Duration(seconds: 45),
+        onTimeout: () {
+          ConsoleLog.error('Timeout na requisição');
+          throw Exception('Tempo limite excedido na requisição (45s)');
+        },
+      );
+
+      final response = await http.Response.fromStream(streamedResponse);
+      ConsoleLog.informacao('🔍 DEBUG RESPOSTA COMPLETA:');
+      ConsoleLog.informacao('  - Status Code: ${response.statusCode}');
+      ConsoleLog.informacao('  - Headers: ${response.headers}');
+      ConsoleLog.informacao('  - Response Body: ${response.body}');
+      
+      // ✅ ANÁLISE DETALHADA DO ERRO 422
+      if (response.statusCode == 422) {
+        ConsoleLog.error('❌ ERRO 422 DETECTADO!');
+        try {
+          final errorData = json.decode(response.body);
+          ConsoleLog.error('  - Mensagem: ${errorData['message']}');
+          if (errorData['errors'] != null) {
+            errorData['errors'].forEach((key, value) {
+              ConsoleLog.error('  - Erro[$key]: $value');
+            });
+          }
+        } catch (e) {
+          ConsoleLog.error('  - Não foi possível parsear o erro: $e');
+        }
+      }
+      
+      return response;
+    } catch (e) {
+      ConsoleLog.error('❌ ERRO NA REQUISIÇÃO: $e');
+      ConsoleLog.error('  - Stack trace: ${StackTrace.current}');
+      rethrow;
+    }
+  }
+
+  // ✅ Método Auxiliar Profissional
+  String _normalizeUrl(String baseUrl, String path) {
+    if (!baseUrl.startsWith('http')) {
+      baseUrl = baseUrl.contains('localhost') ? 'http://$baseUrl' : 'https://$baseUrl';
+    }
+    
+    if (baseUrl.contains('localhost') && !baseUrl.contains(':8002')) {
+      baseUrl = baseUrl.contains(':') ? baseUrl : '$baseUrl:8002';
+    }
+    
+    final cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final cleanPath = path.startsWith('/') ? path.substring(1) : path;
+    
+    return '$cleanBaseUrl/$cleanPath';
+  }
+}

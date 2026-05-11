@@ -1,0 +1,171 @@
+# .github/workflows/build-dev-api.yml
+name: 🚀 Build Dev & Upload to API
+
+on:
+  push:
+    branches: [development, dev]
+  workflow_dispatch:  # Permite executar manualmente
+    inputs:
+      environment:
+        description: 'Ambiente de destino'
+        required: true
+        default: 'teste'
+        type: choice
+        options:
+          - teste
+          - homologacao
+          - qa
+          - uat
+      notes:
+        description: 'Notas da versão'
+        required: false
+        type: string
+
+jobs:
+  build-and-upload:
+    name: Build & Upload to API
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 📥 Checkout
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      # 🎯 Setup Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: 'stable'
+      
+      # 🏷️ Gerar Versão
+      - name: Generate Version
+        id: version
+        run: |
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          DATE=$(date +'%Y.%m.%d')
+          BRANCH=${{ github.ref_name }}
+          ENVIRONMENT=${{ github.event.inputs.environment || 'teste' }}
+          
+          # Version name format: YYYY.MM.DD+COMMIT-BRANCH
+          VERSION_NAME="${DATE}+${COMMIT_COUNT}-${BRANCH}"
+          
+          echo "version_code=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "📱 Version Code: $COMMIT_COUNT"
+          echo "🏷️ Version Name: $VERSION_NAME"
+          echo "🌍 Environment: $ENVIRONMENT"
+      
+      # 📦 Dependencies
+      - name: Install dependencies
+        run: flutter pub get
+      
+      # 🔐 Setup Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      # 🔑 Keystore
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+      
+      # 📝 Key Properties
+      - name: Create key.properties
+        run: |
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
+          echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=upload" >> android/key.properties
+          echo "storeFile=upload-keystore.jks" >> android/key.properties
+      
+      # 🚀 Build APK Universal
+      - name: Build APK
+        run: |
+          flutter build apk \
+            --release \
+            --build-number=${{ steps.version.outputs.version_code }} \
+            --build-name=${{ steps.version.outputs.version_name }}
+      
+      # 🔐 Autenticar na API
+      - name: Authenticate with API
+        id: auth
+        run: |
+          AUTH_RESPONSE=$(curl -s -X POST \
+            "${{ secrets.API_BASE_URL }}/api/v1/central/versionamento/auth" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d '{
+              "email": "${{ secrets.API_EMAIL }}",
+              "password": "${{ secrets.API_PASSWORD }}"
+            }')
+          
+          TOKEN=$(echo $AUTH_RESPONSE | jq -r '.token')
+          
+          if [ "$TOKEN" = "null" ]; then
+            echo "❌ Falha na autenticação"
+            echo "Response: $AUTH_RESPONSE"
+            exit 1
+          fi
+          
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          echo "✅ Autenticação realizada com sucesso"
+      
+      # 📤 Upload APK para API
+      - name: Upload APK to API
+        run: |
+          BUILD_AT=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+          NOTES="${{ github.event.inputs.notes || 'Build automático via GitHub Actions - Branch: ${{ github.ref_name }}' }}"
+          
+          curl -s -X POST \
+            "${{ secrets.API_BASE_URL }}/api/v1/central/versionamento/upload" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
+            -H "Accept: application/json" \
+            -F "name=Integra Mobile" \
+            -F "version=${{ steps.version.outputs.version_name }}" \
+            -F "environment=${{ steps.version.outputs.environment }}" \
+            -F "platform=android" \
+            -F "file=@build/app/outputs/flutter-apk/app-release.apk" \
+            -F "build_at=$BUILD_AT" \
+            -F "is_active=true" \
+            -F "notes=$NOTES"
+      
+      # 📦 Salvar Artefato no GitHub
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-v${{ steps.version.outputs.version_code }}
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 15
+      
+      # 🏷️ Tag no Git
+      - name: Create Git Tag
+        if: success()
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "dev-v${{ steps.version.outputs.version_name }}" -m "Dev Build ${{ steps.version.outputs.version_code }} - ${{ steps.version.outputs.environment }}"
+          git push origin "dev-v${{ steps.version.outputs.version_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # ✅ Notificação de Sucesso
+      - name: Success Notification
+        if: success()
+        run: |
+          echo "🎉 Build e upload realizados com sucesso!"
+          echo "📱 Versão: ${{ steps.version.outputs.version_name }}"
+          echo "🌍 Ambiente: ${{ steps.version.outputs.environment }}"
+          echo "📦 Arquivo enviado: APK"
+      
+      # ❌ Notificação de Erro
+      - name: Error Notification
+        if: failure()
+        run: |
+          echo "❌ Falha no processo de build/upload"
+          echo "📱 Versão: ${{ steps.version.outputs.version_name }}"
+          echo "🌍 Ambiente: ${{ steps.version.outputs.environment }}"

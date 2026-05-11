@@ -1,0 +1,8 @@
+[run]
+omit =
+    **/*.g.dart
+    **/*.freezed.dart
+    **/main.dart
+    test/**
+    integration_test/**
+    **/generated_plugin_registrant.dart
