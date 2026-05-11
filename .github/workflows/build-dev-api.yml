@@ -120,7 +120,16 @@ jobs:
             --build-name=${{ steps.version.outputs.version_name }}
 
       # ──────────────────────────────────────────────
-      # 🔐 Autenticar na API
+      # � Compactar APK em ZIP
+      # ──────────────────────────────────────────────
+      - name: Create ZIP from APK
+        run: |
+          cd build/app/outputs/flutter-apk/
+          zip app-dev-release.zip app-dev-release.apk
+          echo "✅ APK compactado para ZIP com sucesso"
+
+      # ──────────────────────────────────────────────
+      # � Autenticar na API
       # ──────────────────────────────────────────────
       - name: Authenticate with API
         id: auth
@@ -146,12 +155,13 @@ jobs:
           echo "✅ Autenticação realizada com sucesso"
 
       # ──────────────────────────────────────────────
-      # 📤 Upload APK para API
+      # 📤 Upload ZIP para API
       #
-      # CORREÇÃO: caminho correto do APK com flavor
-      #   ✅ app-dev-release.apk  (era app-release.apk)
+      # CORREÇÃO: caminho correto do ZIP com flavor
+      #   ✅ app-dev-release.zip  (era app-release.apk)
+      #   ✅ Arquivo compactado para reduzir tamanho
       # ──────────────────────────────────────────────
-      - name: Upload APK to API
+      - name: Upload ZIP to API
         run: |
           BUILD_AT=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
           NOTES="${{ github.event.inputs.notes || format('Build automático via GitHub Actions - Branch: {0}', github.ref_name) }}"
@@ -164,7 +174,7 @@ jobs:
             -F "version=${{ steps.version.outputs.version_name }}" \
             -F "environment=${{ steps.version.outputs.environment }}" \
             -F "platform=android" \
-            -F "file=@build/app/outputs/flutter-apk/app-dev-release.apk" \
+            -F "file=@build/app/outputs/flutter-apk/app-dev-release.zip" \
             -F "build_at=$BUILD_AT" \
             -F "is_active=true" \
             -F "notes=$NOTES")
@@ -186,14 +196,15 @@ jobs:
       # 📦 Salvar Artefato no GitHub
       #
       # CORREÇÃO: caminho e nome do artefato com flavor
-      #   ✅ app-dev-release.apk  (era app-release.apk)
+      #   ✅ app-dev-release.zip  (era app-release.apk)
       #   ✅ nome do artifact inclui flavor
+      #   ✅ Arquivo compactado para reduzir tamanho
       # ──────────────────────────────────────────────
-      - name: Upload APK Artifact
+      - name: Upload ZIP Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-dev-v${{ steps.version.outputs.version_code }}
-          path: build/app/outputs/flutter-apk/app-dev-release.apk
+          name: zip-dev-v${{ steps.version.outputs.version_code }}
+          path: build/app/outputs/flutter-apk/app-dev-release.zip
           retention-days: 15
 
       # ──────────────────────────────────────────────
@@ -220,7 +231,7 @@ jobs:
           echo "📱 Versão    : ${{ steps.version.outputs.version_name }}"
           echo "🌍 Ambiente  : ${{ steps.version.outputs.environment }}"
           echo "📦 Flavor    : dev"
-          echo "📂 APK       : app-dev-release.apk"
+          echo "📂 ZIP       : app-dev-release.zip"
 
       - name: Error Notification
         if: failure()
